@@ -2,13 +2,14 @@
 //  AudioService.swift
 //  CanYouHearMe
 //
-//  Created by Valery Zazulin on 20/05/25.
+//  Created by Valery Zazulin on 04.07.25.
 //
+
 import SwiftUI
 import AVFoundation
 
 protocol AudioServiceProtocol {
-    var audioFile: URL? { get }
+    var audioFileURL: URL? { get }
     var currentPlayer: AVAudioPlayer? { get }
     var currentDuration: Double { get }
     
@@ -21,7 +22,7 @@ protocol AudioServiceProtocol {
 
 class AudioService: AudioServiceProtocol {
     var recorder: AVAudioRecorder?
-    var audioFile: URL? = nil
+    var audioFileURL: URL? = nil
     var session: AVAudioSession!
     var player: AVAudioPlayer?
     var duration: Double = 0.0
@@ -56,7 +57,7 @@ class AudioService: AudioServiceProtocol {
         
         recorder = try AVAudioRecorder(url: filePath, settings: settings)
         recorder?.record()
-        audioFile = filePath
+        audioFileURL = filePath
         
     }
     
@@ -71,10 +72,10 @@ class AudioService: AudioServiceProtocol {
     }
     
     func playRecording() throws {
-        guard let audioFile = audioFile else {
+        guard let audioFileURL = audioFileURL else {
             throw NSError(domain: "AudioService", code: 1, userInfo: [NSLocalizedDescriptionKey: "No audio file found"])
         }
-        player = try AVAudioPlayer(contentsOf: audioFile)
+        player = try AVAudioPlayer(contentsOf: audioFileURL)
         player?.isMeteringEnabled = true
         player?.prepareToPlay()
         player?.play()

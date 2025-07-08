@@ -19,49 +19,53 @@ class ViewModel {
         self.audioService = audioService
     }
     
-    
-    // MARK: - Old
-    
     var recognizedText: String = ""
-    
-    var audioFile: URL? = nil
+
     var syllables: [(SpeechSounds, Double, String)] = []
-    var words: [Word] = []
-    var lines: [[Word]] = []
-    
-    var availableWidth: CGFloat = 300
-    
-    var hasPermission = false
-    
-    var alertIsPresented: Bool = false
-    var showModal = true
-    var isPresented: Bool = false
-    var hapticBlurValue: CGFloat = 0
     
     var duration: Double = 0.0
     
     var isRecording = false
     var isRecordingAnimation: Bool = false
     
+    var timer: Timer? = nil
+        
+    var syllableIndex = 0
     
+    var lastVolumeValue: CGFloat = 0.0
+    
+    
+    // UI - changing properties
+    var audioFileURL: URL? = nil
+    
+    var words: [Word] = []
+    var lines: [[Word]] = []
+    
+    var availableWidth: CGFloat = 300
+    
+    var hasPermission = false
+    var alertIsPresented: Bool = false
+    var showModal = true
+    var isPresented: Bool = false
+    
+    var hapticBlurValue: CGFloat = 0
     
     var isPlaying = false
     var isPlayingAnimation: Bool = false
     var isPlayButtonEnabled: Bool = false
     
-    var count: Double = 0.0
-    var timer: Timer? = nil
-        
-    var syllableIndex = 0
     var scaledIndices: Set<Int> = []
     var isPhraseDone: Bool = true
     
-    var volumeChangeValue: CGFloat = 50.0
-    var lastVolumeValue: CGFloat = 0.0
+    var count: Double = 0.0
     
+    var volumeChangeValue: CGFloat = 50.0
     var isPlayingWaveShaderTransition: Bool = false
+    
     var strengthValue: Float = 1.0
     var waveStateValue: Float = 0.0
+    
+    var power: Float = 0.0
     
     @MainActor
     func requestSpeechPermission() async {
@@ -96,7 +100,7 @@ class ViewModel {
             withAnimation(.spring(duration: 0.25)) {
                 isRecordingAnimation = isRecording
             }
-            audioFile = audioService.audioFile
+            audioFileURL = audioService.audioFileURL
         } catch {
             print(error.localizedDescription)
             alertIsPresented = true
@@ -111,7 +115,7 @@ class ViewModel {
     }
     
     func playRecording() {
-        guard audioFile != nil else { return }
+        guard audioFileURL != nil else { return }
         
         do {
             try audioService.playRecording()
@@ -135,77 +139,130 @@ class ViewModel {
     
     @MainActor
     func transcribeAudio() async throws {
-        guard let audioFile = audioFile else { return }
+        guard let audioFileURL = audioFileURL else { return }
         
-        if !FileManager.default.fileExists(atPath: audioFile.path) {
-            return
-        }
+        guard isValidAudioFile(at: audioFileURL) else { return }
         
-        do {
-            let player = try AVAudioPlayer(contentsOf: audioFile)
-            if !player.prepareToPlay() { return }
-        } catch {
-            print(error.localizedDescription)
-            return
-        }
+        guard let recognizer = makeRecognizer() else { return }
         
-        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")) else {
-            return
-        }
+        let request = makeRecognitionRequest(for: audioFileURL)
         
-        if !recognizer.supportsOnDeviceRecognition {
-            return
-        }
-        
-        let request = SFSpeechURLRecognitionRequest(url: audioFile)
-        request.addsPunctuation = true
-        request.requiresOnDeviceRecognition = true
-        
-        recognizer.recognitionTask(with: request) { result, error in
+        recognizer.recognitionTask(with: request) { [weak self] result, error in
+            guard let self = self else { return }
+            
             if let result = result {
                 DispatchQueue.main.async {
-                    self.recognizedText = result.bestTranscription.formattedString
-                    let wordsWithPunctuationArray: [String] = self.recognizedText.components(separatedBy: " ")
-                    
-                    if result.isFinal {
-                        let description = result.bestTranscription.segments.description
-                        let phonemes = self.getPhonemes(input: description)
-                        let segments = result.bestTranscription.segments
-                        
-                        for i in 0..<segments.count {
-                            let word = Word(
-                                text: wordsWithPunctuationArray[i],
-                                phonemes: phonemes[i].components(separatedBy: "."),
-                                timestamp: segments[i].timestamp,
-                                duration: segments[i].duration
-                            )
-                            
-                            let wordSyllables = word.getSoundTypeAndAprroximateTimestamp(
-                                phonemes: word.phonemes,
-                                timestamp: word.timestamp,
-                                duration: word.duration
-                            )
-                            
-                            self.syllables += wordSyllables
-                            
-                            let wordAndTime: (String, Double) = (segments[i].substring, word.timestamp - 0.1)
-                            self.words.append(Word(text: wordAndTime.0, phonemes: word.phonemes, timestamp: wordAndTime.1, duration: word.duration))
-                        }
-                    }
-                    self.splitWordsIntoLines()
+                    self.handleTranscriptionResult(result)
                 }
             } else if let error = error {
-                print(error.localizedDescription)
                 DispatchQueue.main.async {
-                    self.alertIsPresented = true
-                    if FileManager.default.fileExists(atPath: audioFile.path) {
-                        self.deleteFile(atPath: audioFile.path)
-                        self.audioFile = nil
-                    }
+                    self.handleTranscriptionError(error, audioFileURL: audioFileURL)
                 }
             }
         }
     }
+    
+    @MainActor
+    private func handleTranscriptionResult(_ result: SFSpeechRecognitionResult) {
+        self.recognizedText = result.bestTranscription.formattedString
+        let wordsWithPunctuation: [String] = self.recognizedText.components(separatedBy: " ")
+        
+        if result.isFinal {
+            let segments = result.bestTranscription.segments
+            let phonemes = self.getPhonemes(input: segments.description)
+            
+            processTranscriptionSegments(segments, wordsWithPunctuation: wordsWithPunctuation, phonemes: phonemes)
+        }
+        self.splitWordsIntoLines()
+    }
+    
+    @MainActor
+    private func handleTranscriptionError(_ error: Error, audioFileURL: URL) {
+        print(error.localizedDescription)
+        alertIsPresented = true
+        
+        if FileManager.default.fileExists(atPath: audioFileURL.path) {
+            deleteFile(atPath: audioFileURL.path)
+            self.audioFileURL = nil
+        }
+    }
+    
+    private func processTranscriptionSegments(_ segments: [SFTranscriptionSegment], wordsWithPunctuation: [String], phonemes: [String]) {
+        for i in 0..<segments.count {
+            let word = Word(
+                text: wordsWithPunctuation[i],
+                phonemes: phonemes[i].components(separatedBy: "."),
+                timestamp: segments[i].timestamp,
+                duration: segments[i].duration
+            )
+            
+            let wordSyllables = word.getSoundTypeAndAprroximateTimestamp(
+                phonemes: word.phonemes,
+                timestamp: word.timestamp,
+                duration: word.duration
+            )
+            
+            self.syllables += wordSyllables
+            
+            let wordAndTime: (String, Double) = (segments[i].substring, word.timestamp - 0.1)
+            self.words.append(Word(text: wordAndTime.0, phonemes: word.phonemes, timestamp: wordAndTime.1, duration: word.duration))
+        }
+    }
+    
+    func splitWordsIntoLines() {
+        var currentLine: [Word] = []
+        var currentLineWidth: CGFloat = 0
+        lines = []
+        
+        for word in words {
+            let wordWidth = widthOfText(word.text)
+            
+            if currentLineWidth + wordWidth <= availableWidth {
+                currentLine.append(word)
+                currentLineWidth += wordWidth
+            } else {
+                lines.append(currentLine)
+                currentLine = [word]
+                currentLineWidth = wordWidth
+            }
+        }
+        
+        if !currentLine.isEmpty {
+            lines.append(currentLine)
+        }
+    }
+    
+    private func isValidAudioFile(at audioFileURL: URL) -> Bool {
+        guard FileManager.default.fileExists(atPath: audioFileURL.path) else { return false }
+        
+        do {
+            let player = try AVAudioPlayer(contentsOf: audioFileURL)
+            return player.prepareToPlay()
+        } catch {
+            print("Invalid audio file: \(error.localizedDescription)")
+            return false
+        }
+    }
+    
+    private func makeRecognizer() -> SFSpeechRecognizer? {
+        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
+              recognizer.supportsOnDeviceRecognition else {
+            print("Speech recognizer not supported or unavailable.")
+            return nil
+        }
+        return recognizer
+    }
+    
+    private func makeRecognitionRequest(for audioFileURL: URL) -> SFSpeechURLRecognitionRequest {
+        let request = SFSpeechURLRecognitionRequest(url: audioFileURL)
+        request.addsPunctuation = true
+        request.requiresOnDeviceRecognition = true
+        return request
+    }
+    
+    
+    
+    // // // // // // // // // // // // // // // //
     
     func getPhonemes(input: String) -> [String] {
         let text = input
@@ -240,30 +297,6 @@ class ViewModel {
         }
     }
 
-    
-    func splitWordsIntoLines() {
-        var currentLine: [Word] = []
-        var currentLineWidth: CGFloat = 0
-        lines = []
-        
-        for word in words {
-            let wordWidth = widthOfText(word.text)
-            
-            if currentLineWidth + wordWidth <= availableWidth {
-                currentLine.append(word)
-                currentLineWidth += wordWidth
-            } else {
-                lines.append(currentLine)
-                currentLine = [word]
-                currentLineWidth = wordWidth
-            }
-        }
-        
-        if !currentLine.isEmpty {
-            lines.append(currentLine)
-        }
-    }
-    
     @MainActor
     func startOrStopRecordingAnimations() {
         if isRecording {

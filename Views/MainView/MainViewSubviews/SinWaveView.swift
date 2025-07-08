@@ -9,12 +9,12 @@ import SwiftUI
 
 struct SinWaveView: View {
     let sinWave: SinWave
-    var time: Double
-    var speed: Double
-    var smoothing: Double
-    var strength: Double
+    let time: Double
+    let speed: Double
+    let smoothing: Double
+    let strength: Double
     
-    var isPresented: Bool
+    let isPresented: Bool
     
     var body: some View {
         Rectangle()

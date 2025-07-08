@@ -11,7 +11,6 @@ import Foundation
 struct MainView: View {
     @Binding var viewModel: ViewModel
     
-        
     var body: some View {
         GeometryReader { geometry in
             VStack(alignment: .center) {
@@ -39,7 +38,7 @@ struct MainView: View {
                         )
                     
                     if viewModel.lines.isEmpty {
-                        Text(viewModel.isRecording ? "Recording..." : (viewModel.audioFile != nil ?
+                        Text(viewModel.isRecording ? "Recording..." : (viewModel.audioFileURL != nil ?
                                  "Doing magic..." : "Ready to record"))
                             .font(.largeTitle)
                             .bold()
